@@ -11,6 +11,7 @@
 #define SUPER_BLOCK_PADDING 4079
 #define ROOT_PADDING 10
 #define BLOCK_SIZE 4096
+#define FAT_EOC 0xFFFF
 
 /*  n_ stands for "number of"  */
 struct superblock_t {
@@ -133,20 +134,81 @@ int fs_info(void)
 	return 0;
 }
 
-// int fs_create(const char *filename)
-// {
-// 	/* TODO: Phase 2 */
-// }
+int fs_create(const char *filename)
+{
+	// 	/* TODO: Phase 2 */
+	int count = 0;
+	if(filename == NULL || filename[strlen(filename)] != '\0' || strlen(filename) > FS_FILENAME_LEN){
+		return -1;
+	}
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
+		if(strlen(root[i].filename) != 0) {
+			if(strcmp(root[i].filename, filename) == 0) {
+				return -1;
+			}
+			else {
+				count += 1;
+			}
+		}
+		if(count == FS_FILE_MAX_COUNT) {
+			return -1;
+		}
+	}
+	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
+		if (root.entry[i].filename[0] == '\0') {
+			strcpy(root.entry[i].filename, filename);
+			root.entry[i].file_size = 0;
+			root.entry[i].idx_first_blk = FAT_EOC;
+			block_write(superblock.root_dir_index,&root);
+			break;
+		}
+	}
+	return 0;
+}
 
-// int fs_delete(const char *filename)
-// {
-// 	/* TODO: Phase 2 */
-// }
+int fs_delete(const char *filename)
+{
+	// 	/* TODO: Phase 2 */
+	if(filename == NULL || filename[strlen(filename)] != '\0' || strlen(filename) > FS_FILENAME_LEN){
+		return -1;
+	}
+	int len = strlen(filename);
+	int file_exists = 0;
+	uint16_t data_index = FAT_EOC;
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++){
+		if(strcmp(root[i].filename, filename) == 0) {
+			file_exists = 1;
+			data_index = root.entry[i].idx_first_blk;
 
-// int fs_ls(void)
-// {
-// 	/* TODO: Phase 2 */
-// }
+			root.entry[i].filename[0] = '\0';
+			root.entry[i].file_size = 0;
+			root.entry[i].idx_first_blk = FAT_EOC;
+			block_write(superblock.root_dir_index,&root);
+			break;
+		}
+	}
+	if(file_exists == 0) return -1;
+
+	uint16_t next_data_index = data_index;
+	uint16_t next = data_index;
+	while(next != FAT_EOC){
+		next_data_index = FAT[next];
+		FAT[next] = 0;
+		next = next_data_index;
+	}
+	return 0;
+}
+
+int fs_ls(void)
+{
+	// 	/* TODO: Phase 2 */
+	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
+		if (root[i].filename[0] != '\0') {
+			printf("File: %s, Size: %i, Data_blk: %i\n", root[i].filename, root[i].file_size, root[i].idx_first_blk);
+		}
+	}
+	return 0;
+}
 
 // int fs_open(const char *filename)
 // {
@@ -168,13 +230,15 @@ int fs_info(void)
 // 	/* TODO: Phase 3 */
 // }
 
-// int fs_write(int fd, void *buf, size_t count)
-// {
-// 	/* TODO: Phase 4 */
-// }
+int fs_write(int fd, void *buf, size_t count)
+{
+	// 	/* TODO: Phase 4 */
 
-// int fs_read(int fd, void *buf, size_t count)
-// {
-// 	/* TODO: Phase 4 */
-// }
+}
+
+int fs_read(int fd, void *buf, size_t count)
+{
+	/* TODO: Phase 4 */
+	
+}
 
