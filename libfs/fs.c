@@ -12,7 +12,7 @@
 #define ROOT_PADDING 10
 #define BLOCK_SIZE 4096
 #define FAT_EOC 0xFFFF
-#define MAX_FS 32  //maximum of 32 file descriptors that can be open simultaneously.
+#define MAX_FD 32  //maximum of 32 file descriptors that can be open simultaneously.
 
 /* Function declarations */
 int file_locator(const char* );
@@ -40,7 +40,7 @@ struct root_t{
 
 
 struct file_descriptor_t {           
-        uint64_t offset;  
+	uint64_t offset;  
 	char   file_name[FS_FILENAME_LEN];
 	uint8_t   is_free;
 };
@@ -48,8 +48,9 @@ struct file_descriptor_t {
 struct superblock_t  superblock;
 struct root_t root[FS_FILE_MAX_COUNT]; // 128 entries. each entry is 32byte 
 uint16_t* FAT; // used to traverse FAT entries
-struct file_descriptor_t fd_table[MAX_FS]; // we can have up to 32 FS
+struct file_descriptor_t fd_table[MAX_FD]; // we can have up to 32 FS
 
+// ======= PHASE 1   ====================================================================================
 
 int fs_mount(const char *diskname)
 {
@@ -146,16 +147,27 @@ int fs_info(void)
 	return 0;
 }
 
+
+// ======= PHASE 2   ====================================================================================
+
+
 int fs_create(const char *filename)
 {
-	// 	/* TODO: Phase 2 */
+	/* create new empty file named filename in the root directory */
+
+	if (block_disk_count() == -1)
+		// no disk is open
+		return -1;
+
 	int count = 0;
 	if(filename == NULL || filename[strlen(filename)] != '\0' || strlen(filename) > FS_FILENAME_LEN){
 		return -1;
 	}
+
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) {
 		if(strlen(root[i].filename) != 0) {
 			if(strcmp(root[i].filename, filename) == 0) {
+				// file named @filename already exists
 				return -1;
 			}
 			else {
@@ -163,15 +175,23 @@ int fs_create(const char *filename)
 			}
 		}
 		if(count == FS_FILE_MAX_COUNT) {
+			// root already contains %FS_FILE_MAX_COUNT
 			return -1;
 		}
 	}
+
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-		if (root.entry[i].filename[0] == '\0') {
-			strcpy(root.entry[i].filename, filename);
-			root.entry[i].file_size = 0;
-			root.entry[i].idx_first_blk = FAT_EOC;
-			block_write(superblock.root_dir_index,&root);
+		if (root[i].filename[0] == '\0') { // look for empty entry
+
+			/* empty file, would have its size be 0, 
+			and the index of the first data block be FAT_EOC. */
+			strcpy(root[i].filename, filename);
+			root[i].file_size = 0;
+			root[i].idx_first_blk = FAT_EOC;
+			// update root entries
+			if (block_write(superblock.root_dir_index, root) == -1)
+				// if failed to update root
+				return -1;
 			break;
 		}
 	}
@@ -180,30 +200,52 @@ int fs_create(const char *filename)
 
 int fs_delete(const char *filename)
 {
-	// 	/* TODO: Phase 2 */
-	if(filename == NULL || filename[strlen(filename)] != '\0' || strlen(filename) > FS_FILENAME_LEN){
+	/* Delete the file named @filename from the root directory  */
+
+	if (block_disk_count() == -1)
+		// no disk is open
 		return -1;
+
+	if(filename == NULL || filename[strlen(filename)] != '\0' || strlen(filename) > FS_FILENAME_LEN){
+		// invalid filename
+		return -1; 
 	}
-	int len = strlen(filename);
-	int file_exists = 0;
+
+	int file_idx = file_locator(filename);
+	if (file_idx == -1)
+		return -1;  // no such file exists
+	
+	for (int i =0; i < MAX_FD; i++)
+	{
+		if (!strcmp(root[file_idx].filename, fd_table[i].file_name))
+		{  // one of entries in FD table, matches this filename
+
+			if (!fd_table[i].is_free)
+			{
+				printf("Can't remove the file. The file is still Open\n");
+				return -1;
+			}
+		}
+	}
+
+
 	uint16_t data_index = FAT_EOC;
 	for(int i = 0; i < FS_FILE_MAX_COUNT; i++){
 		if(strcmp(root[i].filename, filename) == 0) {
-			file_exists = 1;
-			data_index = root.entry[i].idx_first_blk;
-
-			root.entry[i].filename[0] = '\0';
-			root.entry[i].file_size = 0;
-			root.entry[i].idx_first_blk = FAT_EOC;
+			//free the root entry
+			data_index = root[i].idx_first_blk;
+			root[i].filename[0] = '\0';// if entry doesn't contain file, then first char will be NULL
+			root[i].file_size = 0;
+			root[i].idx_first_blk = FAT_EOC;
 			block_write(superblock.root_dir_index,&root);
 			break;
 		}
 	}
-	if(file_exists == 0) return -1;
 
+	// free Data blocks by setting their FAT to 0
 	uint16_t next_data_index = data_index;
 	uint16_t next = data_index;
-	while(next != FAT_EOC){
+	while(next != FAT_EOC){ // loop until we reach end-of-file
 		next_data_index = FAT[next];
 		FAT[next] = 0;
 		next = next_data_index;
@@ -213,7 +255,6 @@ int fs_delete(const char *filename)
 
 int fs_ls(void)
 {
-	// 	/* TODO: Phase 2 */
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
 		if (root[i].filename[0] != '\0') {
 			printf("File: %s, Size: %i, Data_blk: %i\n", root[i].filename, root[i].file_size, root[i].idx_first_blk);
@@ -221,6 +262,8 @@ int fs_ls(void)
 	}
 	return 0;
 }
+
+// ======= PHASE 3   ====================================================================================
 
 // properly set FD, then return it
 int fs_open(const char *filename)
@@ -241,7 +284,7 @@ int fs_open(const char *filename)
 		printf("There is no such file with name %s\n", filename);
 		return -1;
 	}
-	for( uint8_t i = 0; i < MAX_FS; i++)
+	for( uint8_t i = 0; i < MAX_FD; i++)
 	{
 		if (fd_table[i].is_free)
 		{
@@ -262,7 +305,7 @@ int fs_close(int fd)
 	if (block_disk_count() == -1)
 		return -1;
 	
-	if (fd >= MAX_FS)
+	if (fd >= MAX_FD)
 	{
 		printf("Invalid FD\n");
 		return -1;
@@ -280,6 +323,7 @@ int fs_close(int fd)
 	/* reset FD entry */
 	fd_table[fd].is_free = 1;
 	fd_table[fd].offset = 0;
+	fd_table[fd].file_name[0] = '\0';
 	return 0; //success
 
 }
@@ -289,7 +333,7 @@ int fs_stat(int fd)
 	/*  fd: the FD of the file
 		Returns: the size of the file whom FD is provided */
 
-	if ((fd > MAX_FS) || (fd < 0))
+	if ((fd > MAX_FD) || (fd < 0))
 		return -1;
 	
 	if (fd_table[fd].is_free)
@@ -322,17 +366,18 @@ int fs_lseek(int fd, size_t offset)
 	return 0; //sucess
 }
 
-int fs_write(int fd, void *buf, size_t count)
-{
-	// 	/* TODO: Phase 4 */
+// ======= PHASE 4  ====================================================================================
 
-}
+// int fs_write(int fd, void *buf, size_t count)
+// {
+// 	// 	/* TODO: Phase 4 */
 
-int fs_read(int fd, void *buf, size_t count)
-{
-	/* TODO: Phase 4 */
-	
-}
+// }
+
+// int fs_read(int fd, void *buf, size_t count)
+// {	
+// 	return 0;
+// }
 
 /* ==========  HELPER FUNCTIONS  ======================================= */
 int file_locator(const char* fname)
@@ -341,7 +386,7 @@ int file_locator(const char* fname)
 		fname: name of the file to search for 
 
 	   RETURN:
-		the position of the file that matches fname
+		the position of the file in the root directory that matches fname
 		-1 otherwise
 	*/
 
