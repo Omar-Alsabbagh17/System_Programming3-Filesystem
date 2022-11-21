@@ -12,6 +12,11 @@
 #define ROOT_PADDING 10
 #define BLOCK_SIZE 4096
 #define FAT_EOC 0xFFFF
+#define MAX_FS 32  //maximum of 32 file descriptors that can be open simultaneously.
+
+/* Function declarations */
+int file_locator(const char* );
+
 
 /*  n_ stands for "number of"  */
 struct superblock_t {
@@ -34,9 +39,16 @@ struct root_t{
 } __attribute__((packed));
 
 
+struct file_descriptor_t {           
+        uint64_t offset;  
+	char   file_name[FS_FILENAME_LEN];
+	uint8_t   is_free;
+};
+
 struct superblock_t  superblock;
 struct root_t root[FS_FILE_MAX_COUNT]; // 128 entries. each entry is 32byte 
 uint16_t* FAT; // used to traverse FAT entries
+struct file_descriptor_t fd_table[MAX_FS]; // we can have up to 32 FS
 
 
 int fs_mount(const char *diskname)
@@ -210,25 +222,105 @@ int fs_ls(void)
 	return 0;
 }
 
-// int fs_open(const char *filename)
-// {
-// 	/* TODO: Phase 3 */
-// }
+// properly set FD, then return it
+int fs_open(const char *filename)
+{
+	if (block_disk_count() == -1)
+		// no disk is open
+		return -1;
+	
+	if (strlen(filename) > FS_FILENAME_LEN)
+	{
+		printf("file name is too long\n");
+		return -1;
+	}
 
-// int fs_close(int fd)
-// {
-// 	/* TODO: Phase 3 */
-// }
+	int f_index = file_locator(filename);
+	if (f_index == -1)
+	{
+		printf("There is no such file with name %s\n", filename);
+		return -1;
+	}
+	for( uint8_t i = 0; i < MAX_FS; i++)
+	{
+		if (fd_table[i].is_free)
+		{
+			// we found free FS entry
+			fd_table[i].is_free = 0;  // this FD entry is no longer free
+			fd_table[i].offset =  0; // start from the begining of the file
+			strcpy(fd_table[i].file_name, filename);
+			return i;
+		}
+	}
+	printf("Couldn't open the file. All FD entries have been used\n");
+	return -1;
 
-// int fs_stat(int fd)
-// {
-// 	/* TODO: Phase 3 */
-// }
+}
 
-// int fs_lseek(int fd, size_t offset)
-// {
-// 	/* TODO: Phase 3 */
-// }
+int fs_close(int fd)
+{
+	if (block_disk_count() == -1)
+		return -1;
+	
+	if (fd >= MAX_FS)
+	{
+		printf("Invalid FD\n");
+		return -1;
+	}
+	
+	if (fd_table[fd].is_free)
+	{
+		printf("the file with FD=%d is already closed\n", fd);
+		return -1;
+	}
+
+	if (file_locator(fd_table[fd].file_name) == -1)
+		return -1;
+	
+	/* reset FD entry */
+	fd_table[fd].is_free = 1;
+	fd_table[fd].offset = 0;
+	return 0; //success
+
+}
+
+int fs_stat(int fd)
+{
+	/*  fd: the FD of the file
+		Returns: the size of the file whom FD is provided */
+
+	if ((fd > MAX_FS) || (fd < 0))
+		return -1;
+	
+	if (fd_table[fd].is_free)
+		return -1;
+	
+	int idx = file_locator(fd_table[fd].file_name);
+	if (idx == -1)
+		// no file with such name
+		return -1;
+
+	return (int) root[idx].file_size;
+	
+}
+
+int fs_lseek(int fd, size_t offset)
+{
+	/* sets the offset of the file to the given offset */
+	if (fs_stat(fd) == -1)
+		// either fd is invalid, or FD is not used
+		return -1;
+
+	if ((int) offset < 0)
+		return -1;
+
+	if (fs_stat(fd) < (int)offset)
+	// file size is less than the offset
+		return -1;
+	
+	fd_table[fd].offset = offset;
+	return 0; //sucess
+}
 
 int fs_write(int fd, void *buf, size_t count)
 {
@@ -242,3 +334,22 @@ int fs_read(int fd, void *buf, size_t count)
 	
 }
 
+/* ==========  HELPER FUNCTIONS  ======================================= */
+int file_locator(const char* fname)
+{
+	/* PARAMETRS
+		fname: name of the file to search for 
+
+	   RETURN:
+		the position of the file that matches fname
+		-1 otherwise
+	*/
+
+	for (uint16_t i =0; i < FS_FILE_MAX_COUNT; ++i)
+	{
+		if (!strncmp(root[i].filename, fname, FS_FILENAME_LEN))
+			return i;
+	}
+	return -1;
+
+}
