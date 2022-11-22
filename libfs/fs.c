@@ -189,7 +189,7 @@ int fs_create(const char *filename)
 
 			/* empty file, would have its size be 0, 
 			and the index of the first data block be FAT_EOC. */
-			strcpy(root[i].filename, filename);
+			memcpy(root[i].filename,filename,sizeof(root[i].filename));
 			root[i].file_size = 0;
 			root[i].idx_first_blk = FAT_EOC;
 			// update root entries
@@ -371,12 +371,96 @@ int fs_lseek(int fd, size_t offset)
 }
 
 // ======= PHASE 4  ====================================================================================
+uint16_t get_index(size_t offset, uint16_t file_start) {
+	int count_offset = BLOCK_SIZE - 1;
+	uint16_t next_index = file_start;
+	while (next_index != FAT_EOC && count_offset < offset) {
+		if (FAT[next_index] == FAT_EOC)
+			return next_index;
+		// next_index = FAT.arr[next_index]; 
+		count_offset += BLOCK_SIZE;
+	}
+	return next_index; //return data index + offset
+}
 
-// int fs_write(int fd, void *buf, size_t count)
-// {
-// 	// 	/* TODO: Phase 4 */
+int fs_write(int fd, void *buf, size_t count)
+{
+	
+	size_t offset = fd_table[fd].offset;
+	char *filename = (char*)fd_table[fd].file_name;
+	int i = 0;
+	while(strcmp((char*)root[i].filename, filename)){
+		i++;
+	}
+	uint16_t file_start = root[i].idx_first_blk;
+	int root_index = i;
+	if (root_index == -1 || file_start == 0)
+		return -1; 
 
-// }
+	int size = fs_stat(fd);
+	if (size == 0) {
+		uint16_t next_data_index = file_start;
+		uint16_t next = file_start;
+		while(next != FAT_EOC){
+			next_data_index = FAT[next];
+			if(FAT[next] == 0)break;
+			next = next_data_index;
+		}
+		if(next == FAT_EOC)
+			return 0;
+		FAT[next] = FAT_EOC;
+		root[root_index].idx_first_blk  = next;		
+		file_start = root[root_index].idx_first_blk; //update file_start
+	}
+	uint16_t block_num = get_index + superblock.data_blk_start_index;
+	void *bounce_buffer = (void*)malloc(BLOCK_SIZE);
+	block_read((size_t )block_num, bounce_buffer);
+	size_t bounce_offset = offset % BLOCK_SIZE;
+	int size_incrementing_flag = 0;
+	int count_byte = 0;
+	for (size_t i = 0; i < count; i++, bounce_offset++, offset++) {
+		
+		fd_table[fd].offset = offset; //update file table current offset
+		//for every write operation, we incremented buf offset i, bounce(in_block) offset, file offset
+		if (offset >= size) // if reach the end of the file and we are still writing
+			size_incrementing_flag = 1; //start to incrementing the size of the file
+
+		if (bounce_offset >= BLOCK_SIZE) {
+			bounce_offset = 0; //reset bounce offset to the beginning
+			if (size_incrementing_flag == 1) {
+				// if we're incrementing size of the file and need new space
+				uint16_t next = file_start;
+				uint16_t next_data_index;
+				while(next != FAT_EOC){
+					next_data_index = FAT[next];
+					if(FAT[next] == 0)break;
+					next = next_data_index;
+				}
+				if (next == 0xFFFF) {
+					return count_byte; 
+				}
+				FAT[data_index] = next;
+				data_index = next;
+			} else {
+				data_index = get_index(offset, file_start);
+			}
+		uint16_t block_number = data_index + superblock.data_blk_start_index;
+        block_read((size_t )block_number, bounce_buffer);
+		}	
+		memcpy(bounce_buffer + bounce_offset, buf + i, 1); //copy 1 byte each write: buf -> bounce
+		count_byte++;
+		// Potential Performance improvements: writing in 2 cases: reaching the final count OR bounce_offset is 4095
+		// which is: if (i == count - 1 || bounce_offset == BLOCK_SIZE - 1)
+		uint16_t block_number = data_index + superblock.data_blk_start_index;
+		block_write((size_t )block_number, bounce_buffer);
+		
+		if (size_incrementing_flag == 1){ // if we are writing new bytes to the file
+			root[root_index].file_size ++; // increment the size file
+		}
+
+	}
+	return count_byte;
+}
 
 int fs_read(int fd, void *buf, size_t count)
 {
