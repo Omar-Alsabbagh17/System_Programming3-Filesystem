@@ -14,8 +14,12 @@
 #define FAT_EOC 0xFFFF
 #define MAX_FD 32  //maximum of 32 file descriptors that can be open simultaneously.
 
+#define MIN(a,b) (((a)<(b))?(a):(b)) // find minuim of two
+
+
 /* Function declarations */
 int file_locator(const char* );
+int current_block_loactor(uint64_t offset,  int first_blk_index);
 
 
 /*  n_ stands for "number of"  */
@@ -222,7 +226,7 @@ int fs_delete(const char *filename)
 
 			if (!fd_table[i].is_free)
 			{
-				printf("Can't remove the file. The file is still Open\n");
+				// printf("Can't remove the file. The file is still Open\n");
 				return -1;
 			}
 		}
@@ -274,14 +278,14 @@ int fs_open(const char *filename)
 	
 	if (strlen(filename) > FS_FILENAME_LEN)
 	{
-		printf("file name is too long\n");
+		// printf("file name is too long\n");
 		return -1;
 	}
 
 	int f_index = file_locator(filename);
 	if (f_index == -1)
 	{
-		printf("There is no such file with name %s\n", filename);
+		// printf("There is no such file with name %s\n", filename);
 		return -1;
 	}
 	for( uint8_t i = 0; i < MAX_FD; i++)
@@ -295,7 +299,7 @@ int fs_open(const char *filename)
 			return i;
 		}
 	}
-	printf("Couldn't open the file. All FD entries have been used\n");
+	// printf("Couldn't open the file. All FD entries have been used\n");
 	return -1;
 
 }
@@ -307,13 +311,13 @@ int fs_close(int fd)
 	
 	if (fd >= MAX_FD)
 	{
-		printf("Invalid FD\n");
+		//printf("Invalid FD\n");
 		return -1;
 	}
 	
 	if (fd_table[fd].is_free)
 	{
-		printf("the file with FD=%d is already closed\n", fd);
+		// printf("the file with FD=%d is already closed\n", fd);
 		return -1;
 	}
 
@@ -374,10 +378,81 @@ int fs_lseek(int fd, size_t offset)
 
 // }
 
-// int fs_read(int fd, void *buf, size_t count)
-// {	
-// 	return 0;
-// }
+int fs_read(int fd, void *buf, size_t count)
+{
+	/* read @count bytes of data from file into @buf
+		returns : num of bytes read  */
+
+	uint64_t offset = 	fd_table[fd].offset;
+	uint16_t offset_from_blk = offset % BLOCK_SIZE;
+	uint8_t bounce_buf[BLOCK_SIZE];
+
+	uint32_t file_size;
+	size_t amount_to_read;
+	int buf_offset = 0; // tracks how many bytes we read
+	
+
+
+	if (block_disk_count() == -1)
+		return -1;
+	
+	if (fd_table[fd].is_free || fd >= MAX_FD || fd < 0)
+		return -1;
+
+	if (!buf)
+		return -1;
+	
+	int file_index = file_locator(fd_table[fd].file_name);
+	if (file_index == -1)
+		return -1;
+
+	int current_blk = current_block_loactor(offset, root[file_index].idx_first_blk);
+
+	file_size = root[file_index].file_size;
+	if (offset + count > file_size)
+		// reduce number of bytes to be read, since we reaching end of file
+		count = file_size - offset;
+
+	while (count > 0)
+	{
+		if (offset_from_blk != 0)
+		{
+			/* case 1: offset is not at the begining of block */
+			amount_to_read = MIN(count, BLOCK_SIZE); // don't read more than a block
+			if (amount_to_read == BLOCK_SIZE)
+				amount_to_read -= offset_from_blk;
+			else if ((amount_to_read + offset_from_blk) > BLOCK_SIZE)
+				amount_to_read = BLOCK_SIZE - offset_from_blk;
+
+			block_read(current_blk, bounce_buf);
+			memcpy(buf+buf_offset, bounce_buf + offset_from_blk, amount_to_read);
+		}
+		else if (count < BLOCK_SIZE)
+		{
+			// case 2: less than a block left to read
+			block_read(current_blk, bounce_buf);
+			amount_to_read = count;
+			memcpy(buf+buf_offset, bounce_buf, amount_to_read);
+
+		}
+		else {
+			// case 3: offset is aligned to begining of block
+			block_read(current_blk, buf+buf_offset);
+			amount_to_read = BLOCK_SIZE;
+		}
+		offset += amount_to_read;
+		buf_offset += amount_to_read;
+		count -= amount_to_read;
+		offset_from_blk = offset % BLOCK_SIZE;
+		
+		if (FAT[current_blk] == FAT_EOC)
+			break; // end of file
+		current_blk = FAT[current_blk]; // jump to next block of the file
+	}
+	// loop finished
+	fd_table[fd].offset = offset; // update file offset
+	return buf_offset; // # of bytes that we read
+}
 
 /* ==========  HELPER FUNCTIONS  ======================================= */
 int file_locator(const char* fname)
@@ -396,5 +471,23 @@ int file_locator(const char* fname)
 			return i;
 	}
 	return -1;
+}
+
+
+int current_block_loactor(uint64_t offset,  int first_blk_index)
+{
+	/* calculates at which datablock the offset of 
+	the file is located at   
+	PARAMTERS:
+		offset: offset of the file
+		first_blk_index: index of first data block of the file
+	*/
+	int idx = first_blk_index;
+	int blocks_to_jump = offset/BLOCK_SIZE;
+	for (int i = 0; i < blocks_to_jump; i++)
+	{
+		idx = FAT[idx];
+	}
+	return idx + superblock.data_blk_start_index;
 
 }
