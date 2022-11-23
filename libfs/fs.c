@@ -84,7 +84,7 @@ int fs_mount(const char *diskname)
 	// read all FAT entries as a chunks of blocks
 	for (int i = 0; i < superblock.n_FAT_blks; i++)
 	{   // read from i+1, since the first blk is superblock
-		if ( block_read(i+1, FAT+(i*BLOCK_SIZE)) == -1)
+		if ( block_read(i+1, (void*) FAT+(i*BLOCK_SIZE)) == -1)
 		{
 			free(FAT);
 			return -1;
@@ -108,7 +108,7 @@ int fs_umount(void)
 	//update FAT entries
 	for (int i = 0; i < superblock.n_FAT_blks; i++)
 	{   // write to i+1, since the first blk is superblock
-		if ( block_write(i+1, FAT+(i*BLOCK_SIZE)) == -1)
+		if ( block_write(i+1, (void*)FAT+(i*BLOCK_SIZE)) == -1)
 		{
 			free(FAT);
 			return -1;
@@ -143,7 +143,7 @@ int fs_info(void)
 	
 	for (uint16_t i =1; i < superblock.n_data_blks; i++) // i=1, since first entry is always FAT_EOC
 	{
-		if (*(FAT+i) == 0) // Entries marked as 0 correspond to free data blocks
+		if (FAT[i] == 0) // Entries marked as 0 correspond to free data blocks
 			num_free_blks++;
 	}
 	fprintf(stdout, "FS Info:\n");
@@ -577,9 +577,9 @@ int free_db_entries_locator()
 {
 	/* searches the disk for free datablock entries 
 	
-	//Returns:
-	//the index of the free datablock
-	//if no datablock left in the disk, returns -1
+	Returns:
+	the index of the free datablock
+	if no datablock left in the disk, returns -1
 	   */
 	for (u_int16_t i = 0; i < superblock.n_data_blks; i++)
 	{
