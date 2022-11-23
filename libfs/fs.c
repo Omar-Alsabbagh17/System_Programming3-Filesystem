@@ -77,10 +77,12 @@ int fs_mount(const char *diskname)
 		return -1;
 	}
 
-	FAT  = malloc(superblock.n_data_blks * sizeof(uint16_t));
+	FAT  = malloc(superblock.n_FAT_blks * BLOCK_SIZE);
+	if (!FAT)
+		return -1;
 
 	// read all FAT entries as a chunks of blocks
-	for (uint8_t i = 0; i < superblock.n_FAT_blks; i++)
+	for (int i = 0; i < superblock.n_FAT_blks; i++)
 	{   // read from i+1, since the first blk is superblock
 		if ( block_read(i+1, FAT+(i*BLOCK_SIZE)) == -1)
 		{
@@ -104,7 +106,7 @@ int fs_mount(const char *diskname)
 int fs_umount(void)
 {
 	//update FAT entries
-	for (uint8_t i = 0; i < superblock.n_FAT_blks; i++)
+	for (int i = 0; i < superblock.n_FAT_blks; i++)
 	{   // write to i+1, since the first blk is superblock
 		if ( block_write(i+1, FAT+(i*BLOCK_SIZE)) == -1)
 		{
@@ -112,13 +114,13 @@ int fs_umount(void)
 			return -1;
 		}
 	}
+	
 	// update root entries
 	if (block_write(superblock.root_dir_index, root) == -1)
 	{
 		free(FAT);
 		return -1;
 	}
-
 	free(FAT);
 	block_disk_close(); 
 	return 0; //everything was sucessful
@@ -127,22 +129,23 @@ int fs_umount(void)
 
 int fs_info(void)
 {
+	
 	uint8_t root_dir_free_count = 0;  // num of free directories in root
 	for (uint8_t i = 0; i < (uint8_t) FS_FILE_MAX_COUNT; i++) 
 	{
 		if (root[i].filename[0] == '\0') 
 			root_dir_free_count++;
 	}
+	
 
 	int num_free_blks = 0;
 	//read each entry from FAT
+	
 	for (uint16_t i =1; i < superblock.n_data_blks; i++) // i=1, since first entry is always FAT_EOC
 	{
 		if (*(FAT+i) == 0) // Entries marked as 0 correspond to free data blocks
 			num_free_blks++;
 	}
-
-
 	fprintf(stdout, "FS Info:\n");
 	fprintf(stdout,"total_blk_count=%u\n", superblock.n_blks);
 	fprintf(stdout,"fat_blk_count=%u\n", superblock.n_FAT_blks);
@@ -151,6 +154,7 @@ int fs_info(void)
 	fprintf(stdout,"data_blk_count=%u\n", superblock.n_data_blks);
 	fprintf(stdout,"fat_free_ratio=%u/%u\n", num_free_blks, superblock.n_data_blks);
 	fprintf(stdout,"rdir_free_ratio=%u/%u\n", root_dir_free_count, FS_FILE_MAX_COUNT);
+	
 	return 0;
 }
 
@@ -573,11 +577,11 @@ int free_db_entries_locator()
 {
 	/* searches the disk for free datablock entries 
 	
-	Returns:
-	the index of the free datablock
-	if no datablock left in the disk, returns -1
+	//Returns:
+	//the index of the free datablock
+	//if no datablock left in the disk, returns -1
 	   */
-	for (int i = 0; i < superblock.n_data_blks; i++)
+	for (u_int16_t i = 0; i < superblock.n_data_blks; i++)
 	{
 		if (FAT[i] == 0)
 		{
