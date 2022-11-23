@@ -204,7 +204,6 @@ int fs_create(const char *filename)
 
 int fs_delete(const char *filename)
 {
-	/* Delete the file named @filename from the root directory  */
 
 	if (block_disk_count() == -1)
 		// no disk is open
@@ -372,33 +371,34 @@ int fs_lseek(int fd, size_t offset)
 
 // ======= PHASE 4  ====================================================================================
 uint16_t get_index(size_t offset, uint16_t file_start) {
-	int count_offset = BLOCK_SIZE - 1;
+	size_t offset_this = BLOCK_SIZE - 1;
 	uint16_t next_index = file_start;
-	while (next_index != FAT_EOC && count_offset < offset) {
+	while (next_index != FAT_EOC && offset_this < offset) {
 		if (FAT[next_index] == FAT_EOC)
 			return next_index;
-		// next_index = FAT.arr[next_index]; 
-		count_offset += BLOCK_SIZE;
+		next_index = FAT[next_index]; 
+		offset_this += BLOCK_SIZE;
 	}
+
 	return next_index;
 }
 
 int fs_write(int fd, void *buf, size_t count)
 {
 	
-	size_t offset = fd_table[fd].offset;
+	uint64_t offset = fd_table[fd].offset;
 	char *filename = (char*)fd_table[fd].file_name;
 	int i = 0;
 	while(strcmp((char*)root[i].filename, filename)){
 		i++;
 	}
 	uint16_t file_start = root[i].idx_first_blk;
+	uint32_t file_size = root[i].file_size;
 	int root_index = i;
 	if (root_index == -1 || file_start == 0)
 		return -1; 
 
-	int size = fs_stat(fd);
-	if (size == 0) {
+	if (file_size == 0) {
 		uint16_t next_data_index = file_start;
 		uint16_t next = file_start;
 		while(next != FAT_EOC){
@@ -410,20 +410,19 @@ int fs_write(int fd, void *buf, size_t count)
 			return 0;
 		FAT[next] = FAT_EOC;
 		root[root_index].idx_first_blk  = next;		
-		file_start = root[root_index].idx_first_blk;
+		file_start = root[root_index].idx_first_blk; //update file_start
 	}
-	uint16_t block_num = get_index + superblock.data_blk_start_index;
+	uint16_t next_index = get_index(offset,file_start);
+	uint16_t block_num = next_index + superblock.data_blk_start_index;
 	void *bounce_buffer = (void*)malloc(BLOCK_SIZE);
 	block_read((size_t )block_num, bounce_buffer);
 	size_t bounce_offset = offset % BLOCK_SIZE;
 	int size_incrementing_flag = 0;
 	int count_byte = 0;
 	for (size_t i = 0; i < count; i++, bounce_offset++, offset++) {
-		
-		fd_table[fd].offset = offset; 
-		if (offset >= size)
+		fd_table[fd].offset = offset;
+		if (offset >= file_size)
 			size_incrementing_flag = 1;
-
 		if (bounce_offset >= BLOCK_SIZE) {
 			bounce_offset = 0;
 			if (size_incrementing_flag == 1) {
@@ -437,18 +436,17 @@ int fs_write(int fd, void *buf, size_t count)
 				if (next == 0xFFFF) {
 					return count_byte; 
 				}
-				FAT[data_index] = next;
-				data_index = next;
+				FAT[next_index] = next;
+				next_index = next;
 			} else {
-				data_index = get_index(offset, file_start);
+				next_index = get_index(offset, file_start);
 			}
-		uint16_t block_number = data_index + superblock.data_blk_start_index;
+		uint16_t block_number = next_index + superblock.data_blk_start_index;
         block_read((size_t )block_number, bounce_buffer);
 		}	
 		memcpy(bounce_buffer + bounce_offset, buf + i, 1);
 		count_byte++;
-
-		uint16_t block_number = data_index + superblock.data_blk_start_index;
+		uint16_t block_number = next_index + superblock.data_blk_start_index;
 		block_write((size_t )block_number, bounce_buffer);
 		
 		if (size_incrementing_flag == 1){
@@ -461,6 +459,9 @@ int fs_write(int fd, void *buf, size_t count)
 
 int fs_read(int fd, void *buf, size_t count)
 {
+	/* read @count bytes of data from file into @buf
+		returns : num of bytes read  */
+
 	uint64_t offset = 	fd_table[fd].offset;
 	uint16_t offset_from_blk = offset % BLOCK_SIZE;
 	uint8_t bounce_buf[BLOCK_SIZE];
@@ -488,6 +489,7 @@ int fs_read(int fd, void *buf, size_t count)
 
 	file_size = root[file_index].file_size;
 	if (offset + count > file_size)
+		// reduce number of bytes to be read, since we reaching end of file
 		count = file_size - offset;
 
 	while (count > 0)
@@ -526,6 +528,7 @@ int fs_read(int fd, void *buf, size_t count)
 			break; // end of file
 		current_blk = FAT[current_blk]; // jump to next block of the file
 	}
+	// loop finished
 	fd_table[fd].offset = offset; // update file offset
 	return buf_offset; // # of bytes that we read
 }
