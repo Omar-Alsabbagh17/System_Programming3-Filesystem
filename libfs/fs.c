@@ -265,6 +265,7 @@ int fs_delete(const char *filename)
 
 int fs_ls(void)
 {
+	printf("FS Ls:\n");
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
 		if (root[i].filename[0] != '\0') {
 			printf("file: %s, size: %i, data_blk: %i\n", root[i].filename, root[i].file_size, root[i].idx_first_blk);
