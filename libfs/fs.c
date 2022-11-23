@@ -20,6 +20,7 @@
 /* Function declarations */
 int file_locator(const char* );
 int current_block_loactor(uint64_t offset,  int first_blk_index);
+int free_db_entries_locator();
 
 
 /*  n_ stands for "number of"  */
@@ -95,7 +96,7 @@ int fs_mount(const char *diskname)
 		return -1;
 	}
 	for (int i = 0; i < MAX_FD; ++i)
-		fd_table[i].is_free = 1; // make every 
+		fd_table[i].is_free = 1; // mark every in fd_table as free
 	
 	return 0; //everything was succesful
 }
@@ -374,91 +375,84 @@ int fs_lseek(int fd, size_t offset)
 }
 
 // ======= PHASE 4  ====================================================================================
-uint16_t get_index(size_t offset, uint16_t file_start) {
-	size_t offset_this = BLOCK_SIZE - 1;
-	uint16_t next_index = file_start;
-	while (next_index != FAT_EOC && offset_this < offset) {
-		if (FAT[next_index] == FAT_EOC)
-			return next_index;
-		next_index = FAT[next_index]; 
-		offset_this += BLOCK_SIZE;
-	}
-
-	return next_index;
-}
-
 int fs_write(int fd, void *buf, size_t count)
 {
+	if (block_disk_count() == -1)
+		return -1;
+	if (fd_table[fd].is_free || fd >= MAX_FD || fd < 0)
+		return -1;
+	if (!buf)
+		return -1;
 	
 	uint64_t offset = fd_table[fd].offset;
-	char *filename = (char*)fd_table[fd].file_name;
-	int i = 0;
-	while(strcmp((char*)root[i].filename, filename)){
-		i++;
-	}
-	uint16_t file_start = root[i].idx_first_blk;
-	uint32_t file_size = root[i].file_size;
-	int root_index = i;
-	if (root_index == -1 || file_start == 0)
+	int file_index = file_locator(fd_table[fd].file_name);
+	if (file_index == -1)
 		return -1; 
+	uint16_t first_blk_index = root[file_index].idx_first_blk;
+	
 
-	if (file_size == 0) {
-		uint16_t next_data_index = file_start;
-		uint16_t next = file_start;
-		while(next != FAT_EOC){
-			next_data_index = FAT[next];
-			if(FAT[next] == 0)break;
-			next = next_data_index;
+	// current_blk == blk where offset if located at
+	uint16_t current_blk = current_block_loactor(offset, first_blk_index);
+	uint8_t bounce_buf[BLOCK_SIZE];
+	size_t offset_from_blk = offset % BLOCK_SIZE;
+	size_t amount_to_write;
+	int buf_offset = 0; // tracks how many bytes we wrote
+
+	while (1)
+	{
+		if (offset_from_blk != 0)
+		{
+			/* case 1: offset is not at the begining of block*/
+			amount_to_write = MIN(count, BLOCK_SIZE);
+			if (amount_to_write == BLOCK_SIZE)
+				amount_to_write -= offset_from_blk;
+			else if ((amount_to_write + offset_from_blk) > BLOCK_SIZE)
+				amount_to_write = BLOCK_SIZE - offset_from_blk;
+
+			block_read(current_blk, bounce_buf); //read into bounce_buffer
+			memcpy(bounce_buf + offset_from_blk, buf+buf_offset ,amount_to_write );
+			block_write(current_blk, bounce_buf); //write bounce into file
 		}
-		if(next == FAT_EOC)
-			return 0;
-		FAT[next] = FAT_EOC;
-		root[root_index].idx_first_blk  = next;		
-		file_start = root[root_index].idx_first_blk; //update file_start
-	}
-	uint16_t next_index = get_index(offset,file_start);
-	uint16_t block_num = next_index + superblock.data_blk_start_index;
-	void *bounce_buffer = (void*)malloc(BLOCK_SIZE);
-	block_read((size_t )block_num, bounce_buffer);
-	size_t bounce_offset = offset % BLOCK_SIZE;
-	int size_incrementing_flag = 0;
-	int count_byte = 0;
-	for (size_t i = 0; i < count; i++, bounce_offset++, offset++) {
-		fd_table[fd].offset = offset;
-		if (offset >= file_size)
-			size_incrementing_flag = 1;
-		if (bounce_offset >= BLOCK_SIZE) {
-			bounce_offset = 0;
-			if (size_incrementing_flag == 1) {
-				uint16_t next = file_start;
-				uint16_t next_data_index;
-				while(next != FAT_EOC){
-					next_data_index = FAT[next];
-					if(FAT[next] == 0)break;
-					next = next_data_index;
-				}
-				if (next == 0xFFFF) {
-					return count_byte; 
-				}
-				FAT[next_index] = next;
-				next_index = next;
-			} else {
-				next_index = get_index(offset, file_start);
-			}
-		uint16_t block_number = next_index + superblock.data_blk_start_index;
-        block_read((size_t )block_number, bounce_buffer);
-		}	
-		memcpy(bounce_buffer + bounce_offset, buf + i, 1);
-		count_byte++;
-		uint16_t block_number = next_index + superblock.data_blk_start_index;
-		block_write((size_t )block_number, bounce_buffer);
+		else if (count < BLOCK_SIZE)
+		{
+			/* case 2: less than a block to write and 
+				offset aligned with block*/
+
+			block_read(current_blk, bounce_buf);
+			amount_to_write = count;
+			memcpy(bounce_buf, buf + buf_offset, amount_to_write);
+			block_write(current_blk, bounce_buf); // update block
+		}
+		else
+		{
+			/* case 3: offset is aligned and more than a block left*/
+			block_write(current_blk, buf + buf_offset); // update file block
+			amount_to_write = BLOCK_SIZE; 
+		}
+
+		offset += amount_to_write;
+		buf_offset += amount_to_write;
+		count -= amount_to_write;
+		offset_from_blk = offset % BLOCK_SIZE;
+		if (count == 0)
+			break;
+
+		current_blk = FAT[current_blk]; // jump to next block of file
 		
-		if (size_incrementing_flag == 1){
-			root[root_index].file_size ++;
-		}
+		if (FAT[current_blk] == FAT_EOC)
+		{ // extend file size if reached end of the file
 
+			int free_blk_index = free_db_entries_locator();
+			if (free_blk_index == -1)
+			{
+				//no more space left in disk
+				break;
+			}
+
+		}
+		
 	}
-	return count_byte;
+	return buf_offset;
 }
 
 int fs_read(int fd, void *buf, size_t count)
@@ -512,7 +506,7 @@ int fs_read(int fd, void *buf, size_t count)
 		}
 		else if (count < BLOCK_SIZE)
 		{
-			// case 2: less than a block left to read
+			// case 2: less than a block  to read and offset aligned with block
 			block_read(current_blk, bounce_buf);
 			amount_to_read = count;
 			memcpy(buf+buf_offset, bounce_buf, amount_to_read);
@@ -573,4 +567,22 @@ int current_block_loactor(uint64_t offset,  int first_blk_index)
 	}
 	return idx + superblock.data_blk_start_index;
 
+}
+
+int free_db_entries_locator()
+{
+	/* searches the disk for free datablock entries 
+	
+	Returns:
+	the index of the free datablock
+	if no datablock left in the disk, returns -1
+	   */
+	for (int i = 0; i < superblock.n_data_blks; i++)
+	{
+		if (FAT[i] == 0)
+		{
+			return i;
+		}
+	}
+	return -1;
 }
