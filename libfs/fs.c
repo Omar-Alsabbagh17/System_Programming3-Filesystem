@@ -211,7 +211,7 @@ int fs_create(const char *filename)
 
 int fs_delete(const char *filename)
 {
-
+	
 	if (block_disk_count() == -1)
 		// no disk is open
 		return -1;
@@ -343,10 +343,9 @@ int fs_close(int fd)
 
 int fs_stat(int fd)
 {
-	/*  fd: the FD of the file
-		Returns: the size of the file whom FD is provided */
+	/* Returns: the size of the file whom @fd is provided */
 
-	if ((fd > MAX_FD) || (fd < 0))
+	if ((fd >= MAX_FD) || (fd < 0))
 		return -1;
 	
 	if (fd_table[fd].is_free)
@@ -393,15 +392,21 @@ int fs_write(int fd, void *buf, size_t count)
 	int file_index = file_locator(fd_table[fd].file_name);
 	if (file_index == -1)
 		return -1; 
-	uint16_t first_blk_index = root[file_index].idx_first_blk;
-	
 
-	// current_blk == blk where offset if located at
-	uint16_t current_blk = current_block_loactor(offset, first_blk_index);
 	uint8_t bounce_buf[BLOCK_SIZE];
 	size_t offset_from_blk = offset % BLOCK_SIZE;
 	size_t amount_to_write;
 	int buf_offset = 0; // tracks how many bytes we wrote
+
+	uint16_t first_blk_index = root[file_index].idx_first_blk;
+	if (first_blk_index == FAT_EOC) //empty file has fist_blk as FAT_EOC
+	{
+		first_blk_index = free_db_entries_locator();
+		root[file_index].idx_first_blk = first_blk_index;
+		FAT[first_blk_index] = FAT_EOC;
+	}
+	// current_blk == blk where offset if located at
+	uint16_t current_blk = current_block_loactor(offset, first_blk_index);
 
 	while (1)
 	{
@@ -451,12 +456,14 @@ int fs_write(int fd, void *buf, size_t count)
 			if (free_blk_index == -1)
 			{
 				//no more space left in disk
-				break;
+				break ;
 			}
 
 		}
 		
 	}
+	//update file size
+	root[file_index].file_size += buf_offset;
 	return buf_offset;
 }
 
@@ -474,7 +481,6 @@ int fs_read(int fd, void *buf, size_t count)
 	int buf_offset = 0; // tracks how many bytes we read
 	
 
-
 	if (block_disk_count() == -1)
 		return -1;
 	
@@ -487,14 +493,15 @@ int fs_read(int fd, void *buf, size_t count)
 	int file_index = file_locator(fd_table[fd].file_name);
 	if (file_index == -1)
 		return -1;
-
+	
 	int current_blk = current_block_loactor(offset, root[file_index].idx_first_blk);
-
+	
+	
 	file_size = root[file_index].file_size;
-	if (offset + count > file_size)
+	if ((offset + count) > file_size)
 		// reduce number of bytes to be read, since we reaching end of file
 		count = file_size - offset;
-
+	
 	while (count > 0)
 	{
 		if (offset_from_blk != 0)
@@ -526,11 +533,11 @@ int fs_read(int fd, void *buf, size_t count)
 		buf_offset += amount_to_read;
 		count -= amount_to_read;
 		offset_from_blk = offset % BLOCK_SIZE;
-		
 		if (FAT[current_blk] == FAT_EOC)
 			break; // end of file
 		current_blk = FAT[current_blk]; // jump to next block of the file
 	}
+	
 	// loop finished
 	fd_table[fd].offset = offset; // update file offset
 	return buf_offset; // # of bytes that we read
