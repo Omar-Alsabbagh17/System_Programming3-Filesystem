@@ -399,8 +399,9 @@ int fs_write(int fd, void *buf, size_t count)
 	int buf_offset = 0; // tracks how many bytes we wrote
 
 	uint16_t first_blk_index = root[file_index].idx_first_blk;
-	if (first_blk_index == FAT_EOC) //empty file has fist_blk as FAT_EOC
+	if (first_blk_index == FAT_EOC && (count > 0)) //empty file has fist_blk as FAT_EOC
 	{
+		// no longer empty file
 		first_blk_index = free_db_entries_locator();
 		root[file_index].idx_first_blk = first_blk_index;
 		FAT[first_blk_index] = FAT_EOC;
@@ -454,16 +455,17 @@ int fs_write(int fd, void *buf, size_t count)
 
 			int free_blk_index = free_db_entries_locator();
 			if (free_blk_index == -1)
-			{
-				//no more space left in disk
+				//no more space left in the disk
 				break ;
-			}
+			FAT[current_blk] = free_blk_index;
+			FAT[free_blk_index] = FAT_EOC; 
 
 		}
 		
 	}
 	//update file size
 	root[file_index].file_size += buf_offset;
+	fd_table[fd].offset = offset;
 	return buf_offset;
 }
 
@@ -596,5 +598,5 @@ int free_db_entries_locator()
 			return i;
 		}
 	}
-	return -1;
+	return -1; // no more space left in the disk
 }
