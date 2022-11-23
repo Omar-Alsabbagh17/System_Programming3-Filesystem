@@ -94,6 +94,8 @@ int fs_mount(const char *diskname)
 		free(FAT);
 		return -1;
 	}
+	for (int i = 0; i < MAX_FD; ++i)
+		fd_table[i].is_free = 1; // make every 
 	
 	return 0; //everything was succesful
 }
@@ -183,7 +185,7 @@ int fs_create(const char *filename)
 			return -1;
 		}
 	}
-
+	
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
 		if (root[i].filename[0] == '\0') { // look for empty entry
 
@@ -260,7 +262,7 @@ int fs_ls(void)
 {
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
 		if (root[i].filename[0] != '\0') {
-			printf("File: %s, Size: %i, Data_blk: %i\n", root[i].filename, root[i].file_size, root[i].idx_first_blk);
+			printf("file: %s, size: %i, data_blk: %i\n", root[i].filename, root[i].file_size, root[i].idx_first_blk);
 		}
 	}
 	return 0;
@@ -287,6 +289,7 @@ int fs_open(const char *filename)
 		// printf("There is no such file with name %s\n", filename);
 		return -1;
 	}
+	
 	for( uint8_t i = 0; i < MAX_FD; i++)
 	{
 		if (fd_table[i].is_free)
@@ -298,6 +301,7 @@ int fs_open(const char *filename)
 			return i;
 		}
 	}
+	
 	// printf("Couldn't open the file. All FD entries have been used\n");
 	return -1;
 
