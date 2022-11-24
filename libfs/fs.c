@@ -436,7 +436,7 @@ int fs_write(int fd, void *buf, size_t count)
 		}
 		else
 		{
-			/* case 3: offset is aligned and more than a block left*/
+			/* case 3: offset is aligned and at least a block left*/
 			block_write(current_blk, buf + buf_offset); // update file block
 			amount_to_write = BLOCK_SIZE; 
 		}
@@ -445,11 +445,10 @@ int fs_write(int fd, void *buf, size_t count)
 		buf_offset += amount_to_write;
 		count -= amount_to_write;
 		offset_from_blk = offset % BLOCK_SIZE;
+
 		if (count == 0)
 			break;
 
-		current_blk = FAT[current_blk]; // jump to next block of file
-		
 		if (FAT[current_blk] == FAT_EOC)
 		{ // extend file size if reached end of the file
 
@@ -459,8 +458,9 @@ int fs_write(int fd, void *buf, size_t count)
 				break ;
 			FAT[current_blk] = free_blk_index;
 			FAT[free_blk_index] = FAT_EOC; 
-
 		}
+
+		current_blk = FAT[current_blk]; // jump to next block of file
 		
 	}
 	//update file size
@@ -552,8 +552,8 @@ int file_locator(const char* fname)
 		fname: name of the file to search for 
 
 	   RETURN:
-		the position of the file in the root directory that matches fname
-		-1 otherwise
+		the position of the file in the root directory that matches fname,
+		 otherwise returns -1.
 	*/
 
 	for (uint16_t i =0; i < FS_FILE_MAX_COUNT; ++i)
@@ -588,7 +588,7 @@ int free_db_entries_locator()
 	/* searches the disk for free datablock entries 
 	
 	Returns:
-	the index of the free datablock
+	the index of the first free datablock.
 	if no datablock left in the disk, returns -1
 	   */
 	for (u_int16_t i = 0; i < superblock.n_data_blks; i++)
